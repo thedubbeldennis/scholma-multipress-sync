@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: scholma-deal-status-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: HUBSPOT_API_KEY
+        sync: false
+      - key: MULTIPRESS_URL
+        sync: false
+      - key: MULTIPRESS_USER
+        sync: false
+      - key: MULTIPRESS_PASS
+        sync: false
+      - key: API_SECRET
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.0"
