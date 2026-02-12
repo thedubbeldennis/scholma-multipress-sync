@@ -11,6 +11,7 @@ import re
 import time
 import requests
 import urllib3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from fastapi import FastAPI, Query, Header, HTTPException
 
@@ -181,29 +182,38 @@ def sync(
     # Step 1: Get deals
     deals = get_deals_by_stage(stage_ids)
 
-    # Step 2: Check MultiPress
+    # Step 2: Check MultiPress (parallel)
     won = []
     lost = []
     skip = 0
     errors = 0
     no_qn = 0
 
+    # Build work items
+    work = []
     for deal in deals:
         qn = extract_qn(deal)
         if not qn:
             no_qn += 1
             continue
+        work.append((deal, qn))
 
+    # Run MP checks in parallel (20 workers)
+    def _check(item):
+        deal, qn = item
         mp_status, company = check_mp_status(qn)
-        if mp_status is None:
-            errors += 1
-        elif mp_status in STATUS_WON:
-            won.append({"deal_id": deal["id"], "qn": qn, "company": company, "from_stage": deal.get("_stage", "?")})
-        elif mp_status in STATUS_LOST:
-            lost.append({"deal_id": deal["id"], "qn": qn, "company": company, "status": mp_status, "from_stage": deal.get("_stage", "?")})
-        else:
-            skip += 1
-        time.sleep(0.05)
+        return deal, qn, mp_status, company
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        for deal, qn, mp_status, company in pool.map(_check, work):
+            if mp_status is None:
+                errors += 1
+            elif mp_status in STATUS_WON:
+                won.append({"deal_id": deal["id"], "qn": qn, "company": company, "from_stage": deal.get("_stage", "?")})
+            elif mp_status in STATUS_LOST:
+                lost.append({"deal_id": deal["id"], "qn": qn, "company": company, "status": mp_status, "from_stage": deal.get("_stage", "?")})
+            else:
+                skip += 1
 
     # Step 3: Update deals
     updated_won = 0
