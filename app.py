@@ -100,7 +100,7 @@ def check_mp_status(qn: str) -> tuple[str | None, str]:
             params={"quotation_number": qn},
             auth=(MULTIPRESS_USER, MULTIPRESS_PASS),
             verify=False,
-            timeout=30,
+            timeout=10,
         )
         if r.status_code == 200:
             data = r.json()
@@ -198,13 +198,13 @@ def sync(
             continue
         work.append((deal, qn))
 
-    # Run MP checks in parallel (20 workers)
+    # Run MP checks in parallel (5 workers to not overwhelm MultiPress)
     def _check(item):
         deal, qn = item
         mp_status, company = check_mp_status(qn)
         return deal, qn, mp_status, company
 
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         for deal, qn, mp_status, company in pool.map(_check, work):
             if mp_status is None:
                 errors += 1
