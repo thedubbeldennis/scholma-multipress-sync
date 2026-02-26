@@ -5,6 +5,7 @@ Endpoints:
     GET  /health      - Health check + last sync result
     GET  /sync        - Run sync (all active stages, background)
     GET  /sync?stage=voorstel  - Only check 'Voorstel verstuurd' stage
+    POST /quotations  - Fetch & filter MultiPress quotations (for Make.com)
 """
 import os
 import re
@@ -13,8 +14,9 @@ import threading
 import requests
 import urllib3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from fastapi import FastAPI, Query, Header, HTTPException
+from pydantic import BaseModel
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -285,3 +287,53 @@ def sync(
     thread.start()
 
     return {"status": "started", "stage": stage_label, "message": "Sync started. Check /health for results."}
+
+
+class QuotationRequest(BaseModel):
+    type: int = 1
+    days_back: int = 1
+    start_date: str | None = None
+
+
+@app.post("/quotations")
+def get_quotations(body: QuotationRequest, x_api_key: str = Header(None)):
+    """Fetch & filter MultiPress quotations server-side. Replaces Make.com Code module."""
+    if API_SECRET and x_api_key != API_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    if not MULTIPRESS_PASS:
+        raise HTTPException(status_code=500, detail="Missing MultiPress credentials")
+
+    # Calculate date range
+    end_date = date.today().isoformat()
+    if body.start_date:
+        s_date = body.start_date
+    else:
+        s_date = (date.today() - timedelta(days=body.days_back)).isoformat()
+
+    # Fetch all from MultiPress (no server-side date filter available)
+    url = f"{MULTIPRESS_URL}/jobs/getJobsQuotations"
+    try:
+        r = requests.get(
+            url,
+            params={"type": body.type},
+            auth=(MULTIPRESS_USER, MULTIPRESS_PASS),
+            verify=False,
+            timeout=120,
+        )
+        r.raise_for_status()
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="MultiPress API timeout")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"MultiPress API error: {str(e)}")
+
+    data = r.json()
+    all_jobs = data.get("jobs", [])
+
+    # Client-side date filtering
+    filtered = [
+        job for job in all_jobs
+        if s_date <= job.get("quotation_date", "0000-00-00") <= end_date
+    ]
+
+    return {"total_fetched": len(all_jobs), "filtered": len(filtered), "date_range": f"{s_date} to {end_date}", "jobs": filtered}
